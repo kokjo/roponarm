@@ -1,9 +1,16 @@
 import thumb
+import arm
 import pyelf
 import sys
 import struct
 
 p32 = lambda x: struct.pack("<L", x)
+
+def dict_keys_upper(d):
+    d2 = {}
+    for k,v in d.items():
+        d2[k.upper()] = v
+    return d2
 
 class ROP:
     def __init__(self, f):
@@ -14,43 +21,62 @@ class ROP:
         text_sec = f.getsection(".text")
         text_data = text_sec.data
         text_addr = text_sec.addr
-        self.disassembly = list(thumb.disassemble_all(text_data, text_addr))
-        self.pop_pc = filter(
-                lambda (addr, inst): inst[0] == "POP" and "R15" in inst[1],
-                self.disassembly)
+        self.disassembly_thumb = list(thumb.disassemble_all(text_data, text_addr))
+        self.disassembly_arm = list(arm.disassemble_all(text_data, text_addr))
+        self.pops = []
+        self.ldmias = []
+        self.swi_0 = None
+        self.gadgets = []
+        self.find_pops()
+        self.find_ldmias()
         self.find_syscall_gadget()
         self.ropchain = []
 
+    def find_pops(self):
+        self.pops = filter(
+                lambda (addr, inst): inst[0] == "POP" and "R15" in inst[1],
+                self.disassembly_thumb)
+        self.gadgets += [(addr | 1, inst[1]) for (addr, inst) in self.pops]
+
+    def find_ldmias(self):
+        for addr, inst in self.disassembly_arm:
+            if inst[:3] == ("AL", "LDMIA", "R13!"):
+                if "R13" not in inst[3] and "R15" in inst[3]:
+                    self.ldmias.append((addr, inst))
+                    self.gadgets.append((addr, inst[3]))
+
     def find_syscall_gadget(self):
-        self.swi_0 = None
-        for i in range(len(self.disassembly)-1):
-            addr, inst = self.disassembly[i]
+        for i in range(len(self.disassembly_thumb)-1):
+            addr, inst = self.disassembly_thumb[i]
             if inst != ("SWI", 0):
                 continue
-            addr2, inst2 = self.disassembly[i+1]
+            addr2, inst2 = self.disassembly_thumb[i+1]
             if inst2[0] == "POP" and "R15" in inst2[1]:
                 if self.swi_0 and len(inst2[1]) > len(self.swi_0[1][1]):
                     continue
                 self.swi_0 = (addr, inst2)
 
-
     def find_best_gadget(self, regs):
-        def pop_gadget_score(gadget, regs):
-            return len(set(gadget[1]) & regs)
+        def gadget_score(gadget, regs):
+            return len(set(gadget) & regs)
         #must contain atleast one register we want.
-        gadgets = ((a,g) for (a,g) in self.pop_pc if len(set(g[1]) & regs) > 0)
-        return max(gadgets, key = lambda (a, g): pop_gadget_score(g, regs))
+        gadgets = ((a,g) for (a,g) in self.gadgets if len(set(g) & regs) > 0)
+        gadget = max(gadgets, key = lambda (a, g): gadget_score(g, regs))
+        return gadget
+
 
     def set_regs(self, **regs_dict):
+        regs_dict = dict_keys_upper(regs_dict)
         ropchain = []
-        regs = set(map(lambda x: x.upper(), regs_dict.keys()))
+        regs = set(regs_dict.keys())
         old_regs = None
+
         while regs and regs != old_regs:
-            addr, inst = self.find_best_gadget(regs)
-            ropchain.append(addr | 1)
-            ropchain += [regs_dict.get(reg, 0x41414141) for reg in inst[1][:-1]]
+            addr, reg_pops = self.find_best_gadget(regs)
+            ropchain.append(addr)
+            ropchain += [regs_dict.get(reg, 0x41414141) for reg in reg_pops[:-1]]
             old_regs = set(regs)
-            regs -= set(inst[1])
+            regs -= set(reg_pops)
 
         if regs:
             raise Exception("Unable to set registers %r from %r" % (regs, regs_dict))
@@ -58,6 +84,7 @@ class ROP:
         return ropchain
 
     def do_swi(self, **regs_dict):
+        regs_dict = dict_keys_upper(regs_dict)
         ropchain = []
         if self.swi_0 == None:
             raise Exception("SWI 0 gadget not found, Cannot not perform syscall")
@@ -67,15 +94,14 @@ class ROP:
         return ropchain
 
     def do_syscall(self, **regs_dict):
+        regs_dict = dict_keys_upper(regs_dict)
         ropchain = self.set_regs(**regs_dict)
         ropchain += self.do_swi()
         return ropchain
 
     def syscall(self, **regs_dict):
-        regs_dict2 = {}
-        for k,v in regs_dict.items():
-            regs_dict2[k.upper()] = v
-        self.ropchain += self.do_syscall(**regs_dict2)
+        regs_dict = dict_keys_upper(regs_dict)
+        self.ropchain += self.do_syscall(**regs_dict)
 
     def flush(self):
         ropchain = "".join(map(p32, self.ropchain))

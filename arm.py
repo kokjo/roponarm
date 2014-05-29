@@ -46,7 +46,7 @@ def decode_swi(inst):
     return ("SWI", swi_nr)
 
 def decode_stub(inst):
-    print hex(inst)
+    #print hex(inst)
     return ("UNSUPPORTED", )
 
 encs = {8 : decode_blkxfer,
@@ -68,9 +68,16 @@ def disassemble_instruction(inst):
     inst_ = encs.get(inst_enc, decode_stub)(inst)
     return (cond_, )+inst_
 
-print disassemble_instruction("feffffea".decode("hex"))
-print disassemble_instruction("5555bde8".decode("hex"))
-print disassemble_instruction("0f802de9".decode("hex"))
-print disassemble_instruction("0f80bdd8".decode("hex"))
-print disassemble_instruction("414141ef".decode("hex"))
-print disassemble_instruction("ffffff1a".decode("hex"))
+def disassemble_all(data, addr=0):
+    while data != "":
+        yield (addr, disassemble_instruction(data[:4]))
+        addr += 4
+        data = data[4:]
+
+if __name__ == "__main__":
+    print disassemble_instruction("feffffea".decode("hex"))
+    print disassemble_instruction("5555bde8".decode("hex"))
+    print disassemble_instruction("0f802de9".decode("hex"))
+    print disassemble_instruction("0f80bdd8".decode("hex"))
+    print disassemble_instruction("414141ef".decode("hex"))
+    print disassemble_instruction("ffffff1a".decode("hex"))
