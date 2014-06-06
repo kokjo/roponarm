@@ -116,6 +116,9 @@ class ROP:
         regs_dict = dict_keys_upper(regs_dict)
         self.ropchain.append(("syscall", regs_dict))
 
+    def return(self, addr):
+        self.ropchain.append(("return", addr))
+
     def generate_ropchain(self):
         return_addr = None
         regs = set()
@@ -129,6 +132,8 @@ class ROP:
                 if return_addr:
                     regs_dict["R14"] = return_addr
                 return_addr, roppart = self.set_regs(regs_dict, i[2])
+            if i[0] == "return":
+                return_addr = i[1]
             rop = roppart+rop
         rop = [return_addr] + rop
         return rop
