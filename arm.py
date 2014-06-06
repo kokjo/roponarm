@@ -69,10 +69,8 @@ def disassemble_instruction(inst):
     return (cond_, )+inst_
 
 def disassemble_all(data, addr=0):
-    while data != "":
-        yield (addr, disassemble_instruction(data[:4]))
-        addr += 4
-        data = data[4:]
+    for off in range(0, len(data), 4):
+        yield (addr, disassemble_instruction(data[off:off+4]))
 
 if __name__ == "__main__":
     print disassemble_instruction("feffffea".decode("hex"))

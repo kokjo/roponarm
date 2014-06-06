@@ -14,14 +14,14 @@ def dict_keys_upper(d):
     return d2
 
 class ROP:
-    def __init__(self, f):
+    def __init__(self, f, base=0):
         if type(f) == str:
             f = open(f, "r")
         if type(f) == file:
             f = pyelf.ELFFile(f)
         text_sec = f.getsection(".text")
         text_data = text_sec.data
-        text_addr = text_sec.addr
+        text_addr = text_sec.addr+base
         self.disassembly_thumb = list(thumb.disassemble_all(text_data, text_addr))
         self.disassembly_arm = list(arm.disassemble_all(text_data, text_addr))
         self.pops = []
@@ -29,7 +29,7 @@ class ROP:
         self.swi_0 = None
         self.gadgets = []
         self.find_pops()
-        self.find_ldmias()
+        #self.find_ldmias()
         self.find_syscall_gadget()
         self.ropchain = []
         random.shuffle(self.gadgets)

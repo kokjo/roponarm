@@ -88,11 +88,8 @@ def disassemble_instruction(inst):
     return encs[inst_enc](inst)
 
 def disassemble_all(data, addr=0):
-    while data != "":
-        yield (addr, disassemble_instruction(data[:2]))
-        addr += 2
-        data = data[2:]
-
+    for off in range(0, len(data), 2):
+        yield (addr+off, disassemble_instruction(data[off:off+2]))
 
 if __name__ == "__main__":
     print disassemble_instruction("03bd".decode("hex"))
