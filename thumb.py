@@ -35,8 +35,29 @@ def decode_alu_imm(inst):
     op = ["MOV", "CMP", "ADD", "SUB"][op]
     return (op, mkreg(Rd), off)
 
+def decode_alu_branch_hi_pc_loadstore(inst):
+    # the standart say that some things are undefined. fuck that.
+    pc = (inst & 0x0800) >> 11
+    if pc: # pc-relative load/store case
+        Rd = (inst & 0x0700 >> 8)
+        off = (inst & 0xff) << 2
+        return ("LDR", mkreg(Rd), (mkreg(15), off))
 
-def decode_alu(inst):
+    hi_bx = (inst & 0x0400) >> 10
+    if hi_bx: # hi regs ops or branch exchange case
+        op = (inst & 0x0300) >> 8
+        h1 = (inst & 0x0080) >> 7
+        h2 = (inst & 0x0040) >> 6
+        Rs = (inst & 0x0038) >> 3
+        Rd = (inst & 0x0007)
+        Rs += h1*8
+        Rd += h2*8
+        ops = ["ADD", "CMP", "MOV", "BX"]
+        if op != 3:
+            return (ops[op], mkreg(Rd), mkreg(Rs))
+        else:
+            return (ops[op], mkreg(Rs))
+    # ALU case:
     op = (inst & 0x01c0) >> 6
     Rs = (inst & 0x0038) >> 3
     Rd = (inst & 0x0007)
@@ -45,6 +66,35 @@ def decode_alu(inst):
            "TST", "NEG", "CMP", "CMN",
            "ORR", "MUL", "BIC", "MVN"]
     return (ops[op], mkreg(Rd), mkreg(Rs))
+
+def decode_move_shift(inst):
+    op = (inst & 0x1800) >> 11
+    Rs = (inst & 0x0038) >> 3
+    Rd = (inst & 0x0007)
+    off = (inst & 0x07c0) >> 6
+    ops = ["LSL", "LSR", "ASR", "INVALID_SHIFT_INSTRUCTION"]
+    return (ops[op], mkreg(Rd), mkreg(Rs), off)
+
+def decode_load_store_reg(inst):
+    e = (inst & 0x0200) >> 9
+    Ro = (inst & 0x01c0) >> 6
+    Rb = (inst & 0x0038) >> 3
+    Rd = (inst & 0x0007)
+
+    if e == 0:
+        l = (inst & 0x0800) >> 11
+        b = (inst & 0x0400) >> 10
+        inst = ["STR","LDR"][l]+["", "B"][b]
+    else:
+        sh = (inst & 0x0600) >> 10
+        inst = ["STRH", "LDRH", "LDSB", "LDSH"][sh]
+
+    return (inst, mkreg(Rd), (mkreg(Rb), mkreg(Ro)))
+
+def decode_load_store_word(inst):
+    return ("UNSUPPORTED",)
+
+
 
 conds ={0:"EQ", 1:"NE", 2:"CS", 3:"CC",
         4:"MI", 5:"PL", 6:"VS", 7:"VC",
@@ -65,12 +115,12 @@ def decode_bcc(inst):
 def decode_stub(inst):
     return ("UNSUPPORTED", )
 
-encs = [decode_stub,
-        decode_stub,
+encs = [decode_move_shift,
+        decode_move_shift,
         decode_alu_imm,
         decode_alu_imm,
-        decode_alu,
-        decode_stub,
+        decode_alu_branch_hi_pc_loadstore,
+        decode_load_store_reg,
         decode_stub,
         decode_stub,
         decode_stub,
